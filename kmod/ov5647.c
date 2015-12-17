@@ -1,6 +1,7 @@
 /*
  * ov5647.c
  *
+ * Copyright (C) 2015 Jason Whittaker <jpwhitt@yahoo.com>
  * Copyright (C) 2015 Sylvain Munaut <tnt@246tNt.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -18,6 +19,7 @@
 #include <media/v4l2-async.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
+#include <media/v4l2-ctrls.h> 
 
 
 #define DRIVER_NAME	"ov5647"
@@ -27,29 +29,381 @@ module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Debug level (0-2)");
 
 
+/* Data ------------------------------------------------------------------- */
+
 struct ov5647 {
 	struct v4l2_subdev sd;		/* Must be first ! */
 	struct media_pad pad;
 	struct i2c_client *client;
 	struct gpio_desc *gpio_ena;
+	struct v4l2_mbus_framefmt format;
 	u32 xclk_freq;
 };
 
-/* Data ------------------------------------------------------------------- */
 
-const static struct {
-	enum v4l2_mbus_pixelcode code;
-	int h_lsb;
-	int v_msb;
-} ov5647_mbus_fmts[] = {
-	{ V4L2_MBUS_FMT_SBGGR8_1X8,	0, 0 },
-	{ V4L2_MBUS_FMT_SGBRG8_1X8,	1, 0 },
-	{ V4L2_MBUS_FMT_SGRBG8_1X8,	0, 1 },
-	{ V4L2_MBUS_FMT_SRGGB8_1X8,	1, 1 },
-	{ V4L2_MBUS_FMT_SBGGR10_1X10,	0, 0 },
-	{ V4L2_MBUS_FMT_SGBRG10_1X10,	1, 0 },
-	{ V4L2_MBUS_FMT_SGRBG10_1X10,	0, 1 },
-	{ V4L2_MBUS_FMT_SRGGB10_1X10,	1, 1 },
+/*
+Lacking a proper D-Phy, the porcupine board needs a level-shifting
+resistor network. Without this the MIPI link won't run at full-speed.
+*/
+//#define LEVELSHIFTERS		//Un-comment if you have a porcupine board with resistor network
+#define REG_DLY  0xffff
+
+
+struct regval_list {
+  unsigned short addr;
+  unsigned char data;
+};
+
+static struct regval_list sensor_common[] = {
+	{ 0x0100, 0x00 },// ; software standby
+	{ 0x0103, 0x01 },// ; software reset
+	//delay(5ms) 
+	{ REG_DLY,0x05 }, //must delay
+	{ 0x3034, 0x1A },
+//	{ 0x3035, 0x21 },
+//	{ 0x3036, 0x46 },
+//	{ 0x303c, 0x11 },
+	{ 0x3106, 0xf5 },
+//	{ 0x3821, 0x07 },
+//	{ 0x3820, 0x41 },
+	{ 0x3827, 0xec },
+	{ 0x370c, 0x0f },
+//	{ 0x3612, 0x59 },
+//	{ 0x3618, 0x00 },
+	{ 0x5000, 0x06 },
+	{ 0x5001, 0x01 },
+	{ 0x5002, 0x40 },
+	{ 0x5003, 0x08 },
+	{ 0x5a00, 0x08 },
+	{ 0x3000, 0x00 },
+	{ 0x3001, 0x00 },
+	{ 0x3002, 0x00 },
+	{ 0x3016, 0x08 },
+	{ 0x3017, 0xe0 },
+	{ 0x3018, 0x44 },
+	{ 0x301c, 0xf8 },
+	{ 0x301d, 0xf0 },
+	{ 0x3a18, 0x00 },
+	{ 0x3a19, 0xf8 },
+	{ 0x3c01, 0x80 },
+	{ 0x3b07, 0x0c },
+//	{ 0x380c, 0x07 },
+//	{ 0x380d, 0x68 },
+//	{ 0x380e, 0x03 },
+//	{ 0x380f, 0xd8 },
+//	{ 0x3814, 0x31 },
+//	{ 0x3815, 0x31 },
+//	{ 0x3708, 0x64 },
+//	{ 0x3709, 0x52 },
+	{ 0x3630, 0x2e },
+	{ 0x3632, 0xe2 },
+	{ 0x3633, 0x23 },
+	{ 0x3634, 0x44 },
+	{ 0x3636, 0x06 },
+	{ 0x3620, 0x64 },
+	{ 0x3621, 0xe0 },
+	{ 0x3600, 0x37 },
+	{ 0x3704, 0xa0 },
+	{ 0x3703, 0x5a },
+	{ 0x3715, 0x78 },
+	{ 0x3717, 0x01 },
+	{ 0x3731, 0x02 },
+	{ 0x370b, 0x60 },
+	{ 0x3705, 0x1a },
+	{ 0x3f05, 0x02 },
+	{ 0x3f06, 0x10 },
+	{ 0x3f01, 0x0a },
+//	{ 0x3a08, 0x01 },
+//	{ 0x3a09, 0x27 },
+//	{ 0x3a0a, 0x00 },
+//	{ 0x3a0b, 0xf6 },
+//	{ 0x3a0d, 0x04 },
+//	{ 0x3a0e, 0x03 },
+	{ 0x3a0f, 0x58 },
+	{ 0x3a10, 0x50 },
+	{ 0x3a1b, 0x58 },
+	{ 0x3a1e, 0x50 },
+	{ 0x3a11, 0x60 },
+	{ 0x3a1f, 0x28 },
+	{ 0x4001, 0x02 },
+//	{ 0x4004, 0x02 },
+	{ 0x4000, 0x09 },
+//	{ 0x4837, 0x24 },
+	{ 0x4050, 0x6e },
+	{ 0x4051, 0x8f },
+};
+
+
+/* 2592 x 1944 @ 15 fps */
+	/*
+	 * MIPI Link   : 425.000 Mbps
+	 * Pixel clock : 85.000 MHz
+	 * Timing zone : 2752 x 1974
+	 * FPS         : 15.6
+	*/
+static struct regval_list sensor_2592_1944_15[] = {
+	{ 0x3035, 0x21 },
+#ifdef LEVELSHIFTERS	
+	{ 0x3036, 0x66 },
+#else
+	{ 0x3036, 0x5c },
+#endif
+	{ 0x303c, 0x11 },
+	{ 0x3821, 0x06 },
+	{ 0x3820, 0x00 },
+	{ 0x3612, 0x5b },
+	{ 0x3618, 0x04 },
+	{ 0x380c, 0x0a },
+	{ 0x380d, 0xc0 },
+	{ 0x380e, 0x07 },
+	{ 0x380f, 0xb6 },
+	{ 0x3814, 0x11 },
+	{ 0x3815, 0x11 },
+	{ 0x3708, 0x64 },
+	{ 0x3709, 0x12 },
+	{ 0x3808, 0x0a },
+	{ 0x3809, 0x20 },
+	{ 0x380a, 0x07 },
+	{ 0x380b, 0x98 },
+	{ 0x3800, 0x00 },
+	{ 0x3801, 0x0c },
+	{ 0x3802, 0x00 },
+	{ 0x3803, 0x04 },
+	{ 0x3804, 0x0a },
+	{ 0x3805, 0x33 },
+	{ 0x3806, 0x07 },
+	{ 0x3807, 0xa3 },
+	{ 0x3a08, 0x01 },
+	{ 0x3a09, 0x28 },
+	{ 0x3a0a, 0x00 },
+	{ 0x3a0b, 0xf6 },
+	{ 0x3a0d, 0x07 },
+	{ 0x3a0e, 0x06 },
+	{ 0x4004, 0x04 },
+	{ 0x4837, 0x19 },
+};
+
+/* 1936 x 1088 @ 30 fps */
+	/*
+	 * MIPI Link   : 416.667 Mbps
+	 * Pixel clock : 83.333 MHz
+	 * Timing zone : 2416 x 1104
+	 * FPS         : 31.2
+	 */
+static struct regval_list sensor_1936_1088_30[] = {
+	{ 0x3035, 0x21 },
+#ifdef LEVELSHIFTERS	
+	{ 0x3036, 0x64 },
+#else
+	{ 0x3036, 0x5c },
+#endif	
+	{ 0x303c, 0x11 },
+	{ 0x3821, 0x06 },
+	{ 0x3820, 0x00 },
+	{ 0x3612, 0x5b },
+	{ 0x3618, 0x04 },
+	{ 0x380c, 0x09 },
+	{ 0x380d, 0x70 },
+	{ 0x380e, 0x04 },
+	{ 0x380f, 0x50 },
+	{ 0x3814, 0x11 },
+	{ 0x3815, 0x11 },
+	{ 0x3708, 0x64 },
+	{ 0x3709, 0x12 },
+	{ 0x3808, 0x07 },
+	{ 0x3809, 0x90 },	/* 80 */
+	{ 0x380a, 0x04 },
+	{ 0x380b, 0x40 },	/* 38 */
+	{ 0x3800, 0x01 },
+	{ 0x3801, 0x54 },	/* 5c */
+	{ 0x3802, 0x01 },
+	{ 0x3803, 0xb0 },	/* b2 */
+	{ 0x3804, 0x08 },
+	{ 0x3805, 0xeb },	/* e3 */
+	{ 0x3806, 0x05 },
+	{ 0x3807, 0xf3 },	/* f1 */
+	{ 0x3a08, 0x01 },
+	{ 0x3a09, 0x4b },
+	{ 0x3a0a, 0x01 },
+	{ 0x3a0b, 0x13 },
+	{ 0x3a0d, 0x04 },
+	{ 0x3a0e, 0x03 },
+	{ 0x4004, 0x04 },
+	{ 0x4837, 0x19 },
+};
+
+/* 1296 x 968 @ 30 fps */
+	/*
+	 * MIPI Link   : 291.667 Mbps
+	 * Pixel clock : 58.333 MHz
+	 * Timing zone : 1896 x 984
+	 * FPS         : 31.3
+	 */
+static struct regval_list sensor_1296_968_30[] = {
+	{ 0x3035, 0x21 },
+	{ 0x3036, 0x46 },
+	{ 0x303c, 0x11 },
+	{ 0x3821, 0x07 },
+	{ 0x3820, 0x41 },
+	{ 0x3612, 0x59 },
+	{ 0x3618, 0x00 },
+	{ 0x380c, 0x07 },
+	{ 0x380d, 0x68 },
+	{ 0x380e, 0x03 },
+	{ 0x380f, 0xd8 },
+	{ 0x3814, 0x31 },
+	{ 0x3815, 0x31 },
+	{ 0x3708, 0x64 },
+	{ 0x3709, 0x52 },
+	{ 0x3808, 0x05 },
+	{ 0x3809, 0x10 },	/* 00 */
+	{ 0x380a, 0x03 },
+	{ 0x380b, 0xc8 },	/* c0 */
+	{ 0x3800, 0x00 },
+	{ 0x3801, 0x10 },	/* 18 */
+	{ 0x3802, 0x00 },
+	{ 0x3803, 0x08 },	/* 0e */
+	{ 0x3804, 0x0a },
+	{ 0x3805, 0x4f },	/* 27 */
+	{ 0x3806, 0x07 },
+	{ 0x3807, 0x9b },	/* 95 */
+	{ 0x3a08, 0x01 },
+	{ 0x3a09, 0x27 },
+	{ 0x3a0a, 0x00 },
+	{ 0x3a0b, 0xf6 },
+	{ 0x3a0d, 0x04 },
+	{ 0x3a0e, 0x03 },
+	{ 0x4004, 0x02 },
+	{ 0x4837, 0x24 },
+};
+
+/* 1296 x 728 @ 30 fps */
+	/*
+	 * MIPI Link   : TBD Mbps
+	 * Pixel clock : TBD MHz
+	 * Timing zone : 1896 x 984
+	 * FPS         : 31.3
+	 */
+static struct regval_list sensor_1296_728_30_regs[] = { //720: 1280*720@30fps
+	{ 0x3035, 0x21 }, //clk                
+	{ 0x3036, 0x32 }, //clk                
+	{ 0x303c, 0x11 }, //clk                
+	{ 0x3820, 0x41 }, //vbin               
+	{ 0x3821, 0x07 }, //hbin               
+	{ 0x3612, 0x49 }, //                   
+	{ 0x3618, 0x00 }, //                   
+	{ 0x3708, 0x22 }, //                   
+	{ 0x3709, 0x52 }, //                   
+	{ 0x370c, 0x03 }, //                   
+	{ 0x380c, 0x06 }, //[4:0]hts high      
+	{ 0x380d, 0xd6 }, //[7:0]hts low       
+	{ 0x380e, 0x03 }, //[4:0]vts high      
+	{ 0x380f, 0x20 }, //[7:0]vts low       
+	{ 0x3814, 0x31 }, //h subsample inc    
+	{ 0x3815, 0x31 }, //v subsample inc    
+	{ 0x3808, 0x05 }, //[4:0]dvp h out high
+	{ 0x3809, 0x10 }, //[7:0]dvp h out low 
+	{ 0x380a, 0x02 }, //[4:0]dvp v out high
+	{ 0x380b, 0xd8 }, //[7:0]dvp v out low 
+	{ 0x3800, 0x00 }, //[4:0]dvp h start   
+	{ 0x3801, 0x10 }, //[7:0]dvp h start   
+	{ 0x3802, 0x00 }, //[4:0]dvp v start   
+	{ 0x3803, 0xe8 }, //[7:0]dvp v start   
+	{ 0x3804, 0x0a }, //[4:0]dvp h end     
+	{ 0x3805, 0x4f }, //[7:0]dvp h end     
+	{ 0x3806, 0x06 }, //[4:0]dvp v end     
+	{ 0x3807, 0xb7 }, //[7:0]dvp v end     
+    { 0x3a08, 0x00 }, //
+	{ 0x3a09, 0xdf }, //
+	{ 0x3a0a, 0x00 }, //
+	{ 0x3a0b, 0xba }, //
+	{ 0x3a0d, 0x04 }, //
+	{ 0x3a0e, 0x03 }, //
+};
+
+
+
+static struct regval_list sensor_644_484_60_regs[] = { //VGA: 644*484@60fps
+    { 0x3035, 0x21 }, //clk                
+    { 0x3036, 0x5c }, //clk                
+    { 0x303c, 0x11 }, //clk                
+    { 0x3820, 0x41 }, //vbin               
+    { 0x3821, 0x07 }, //hbin               
+	{ 0x3612, 0x49 }, //                   
+	{ 0x3618, 0x00 }, //                   
+	{ 0x3708, 0x22 }, //                   
+	{ 0x3709, 0x52 }, //                   
+	{ 0x370c, 0x03 }, //                    
+    { 0x380c, 0x06 }, //[4:0]hts high      
+    { 0x380d, 0xd6 }, //[7:0]hts low       
+    { 0x380e, 0x02 }, //[4:0]vts high      
+    { 0x380f, 0xd0 }, //[7:0]vts low       
+    { 0x3814, 0x71 }, //h subsample inc    
+    { 0x3815, 0x71 }, //v subsample inc    
+    { 0x3808, 0x02 }, //[4:0]dvp h out high
+    { 0x3809, 0x84 }, //[7:0]dvp h out low 
+    { 0x380a, 0x01 }, //[4:0]dvp v out high
+    { 0x380b, 0xe4 }, //[7:0]dvp v out low 
+    { 0x3800, 0x00 }, //[4:0]dvp h start   
+    { 0x3801, 0x10 }, //[7:0]dvp h start   
+    { 0x3802, 0x00 }, //[4:0]dvp v start   
+    { 0x3803, 0x00 }, //[7:0]dvp v start   
+    { 0x3804, 0x0a }, //[4:0]dvp h end     
+    { 0x3805, 0x3f }, //[7:0]dvp h end     
+    { 0x3806, 0x07 }, //[4:0]dvp v end     
+    { 0x3807, 0xaf }, //[7:0]dvp v end     
+	{ 0x3a08, 0x01 },
+	{ 0x3a09, 0x28 },
+	{ 0x3a0a, 0x00 },
+	{ 0x3a0b, 0xf6 },
+	{ 0x3a0d, 0x07 },
+	{ 0x3a0e, 0x06 },
+	{ 0x4004, 0x04 },
+	{ 0x4837, 0x19 },
+	{ 0x5003, 0x0e }, //
+};
+
+
+struct ov5647_framesize {
+	u16 width;
+	u16 height;
+	u8  fps;
+    struct regval_list *regs;
+    int regs_size;
+};
+
+static const struct ov5647_framesize ov5647_framesizes[] = {
+	{
+		.width		= 644,
+		.height		= 484,
+		.fps        = 60,
+		.regs		= sensor_644_484_60_regs,
+		.regs_size  = ARRAY_SIZE(sensor_644_484_60_regs)
+	}, {
+		.width		= 1296,
+		.height		= 728,
+		.fps        = 30,
+		.regs		= sensor_1296_728_30_regs,
+		.regs_size  = ARRAY_SIZE(sensor_1296_728_30_regs)
+	}, {
+		.width		= 1296,
+		.height		= 968,
+		.fps        = 30,
+		.regs		= sensor_1296_968_30,
+		.regs_size  = ARRAY_SIZE(sensor_1296_968_30)
+	}, {
+		.width		= 1936,
+		.height		= 1088,
+		.fps        = 30,
+		.regs		= sensor_1936_1088_30,
+		.regs_size  = ARRAY_SIZE(sensor_1936_1088_30)
+	}, {
+		.width		= 2592,
+		.height		= 1944,
+		.fps        = 15,
+		.regs		= sensor_2592_1944_15,
+		.regs_size  = ARRAY_SIZE(sensor_2592_1944_15)
+	}
 };
 
 
@@ -110,12 +464,38 @@ ov5647_reg_write(struct ov5647 *s, uint16_t reg, uint8_t val)
 	return rv != 1;
 }
 
+static int ov5647_reg_write_array(struct ov5647 *s, struct regval_list *regs, int array_size)
+{
+	int i=0;
+	
+  if(!regs)
+  	return -EINVAL;
+  
+  while(i<array_size)
+  {
+	if(regs->addr == REG_DLY) {
+	  v4l2_dbg(2, debug, s->client, "%s: delay %dms\n",
+		__func__, regs->data);
+      msleep(regs->data);
+    } 
+    else {  
+      	if(ov5647_reg_write(s, regs->addr, regs->data)) {
+  			v4l_err(s->client, "i2c write failed.\n");
+      	}
+    }
+    i++;
+    regs++;
+  }
+  return 0;
+}
+
 static void
 ov5647_power_on(struct ov5647 *s)
 {
 	if (s->gpio_ena) {
 		gpiod_set_value_cansleep(s->gpio_ena, 1);
 		msleep(30); /* 5ms ramp-up, 5ms pwdn, 20ms boot */
+		v4l2_dbg(2, debug, s->client, "%s\n", __func__);
 	}
 }
 
@@ -124,6 +504,49 @@ ov5647_power_off(struct ov5647 *s)
 {
 	if (s->gpio_ena)
 		gpiod_set_value_cansleep(s->gpio_ena, 0);
+		v4l2_dbg(2, debug, s->client, "%s\n", __func__);
+}
+
+static int 
+ov5647_get_sysclk(struct ov5647 *s)
+{
+     /* calculate sysclk */
+    int xvclk = s->xclk_freq / 10000;
+    int temp1, temp2;
+    int Multiplier, PreDiv, VCO, SysDiv, Pll_rdiv, Bit_div2x = 1, sclk_rdiv, sysclk;
+
+    int sclk_rdiv_map[] = {1, 2, 4, 8};
+
+    temp1 = ov5647_reg_read(s, 0x3034);
+    temp2 = temp1 & 0x0f;
+    if (temp2 == 8 || temp2 == 10) {
+        Bit_div2x = temp2 / 2;
+    }
+
+    temp1 = ov5647_reg_read(s, 0x3035);
+    SysDiv = temp1>>4;
+    if (SysDiv == 0) {
+           SysDiv = 16;
+    }
+
+    temp1 = ov5647_reg_read(s, 0x3036);
+    Multiplier = temp1;
+
+    temp1 = ov5647_reg_read(s, 0x3037);
+    PreDiv = temp1 & 0x0f;
+    Pll_rdiv = ((temp1 >> 4) & 0x01) + 1;
+
+    temp1 = ov5647_reg_read(s, 0x3108);
+    temp2 = temp1 & 0x03;
+    sclk_rdiv = sclk_rdiv_map[temp2];
+
+    VCO = xvclk * Multiplier / PreDiv;
+
+    sysclk = VCO / SysDiv / Pll_rdiv * 2 / Bit_div2x / sclk_rdiv;
+
+    pr_info("sysclk is %ikHz\n", sysclk);
+
+    return sysclk;
 }
 
 
@@ -160,12 +583,18 @@ static int
 ov5647_co_set_power(struct v4l2_subdev *sd, int on)
 {
 	struct ov5647 *s = to_sensor(sd);
+	int ret = 0;
 
 	v4l2_dbg(1, debug, s->client, "%s: on: %d\n", __func__, on);
 
 	if (on) {
 		ov5647_power_on(s);
-			/* FIXME: Issue init */
+
+		ret = ov5647_reg_write_array(s, sensor_common, ARRAY_SIZE(sensor_common));
+		if(ret < 0) {
+	    	v4l_err(s->client, "sensor initialisation error\n");
+	    	return ret;
+	  	}	
 	} else
 		ov5647_power_off(s);
 
@@ -187,11 +616,6 @@ static int
 ov5647_po_enum_mbus_code(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
                          struct v4l2_subdev_mbus_code_enum *code)
 {
-	if ((code->pad != 0) || (code->index >= ARRAY_SIZE(ov5647_mbus_fmts)))
-		return -EINVAL;
-
-	code->code = ov5647_mbus_fmts[code->index].code;
-
 	return 0;
 }
 
@@ -199,28 +623,107 @@ static int
 ov5647_po_enum_frame_size(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
                           struct v4l2_subdev_frame_size_enum *fse)
 {
-	return 0; /* FIXME */
+	
+	if (fse->index >= ARRAY_SIZE(ov5647_framesizes))
+		return -EINVAL;
+
+	fse->max_width  = ov5647_framesizes[fse->index].width;
+	fse->max_height = ov5647_framesizes[fse->index].height;
+
+	return 0; 
 }
 
 static int
 ov5647_po_enum_frame_interval(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
                               struct v4l2_subdev_frame_interval_enum *fie)
 {
+	pr_info("ov5647_po_enum_frame_interval\n");
+
 	return 0; /* FIXME */
+}
+
+static int
+ov5647_try_format(struct ov5647 *s, struct v4l2_mbus_framefmt *fmt, struct ov5647_framesize **fsize)
+{
+	
+	const struct ov5647_framesize *fs;
+	int i;
+
+	v4l2_dbg(1, debug, s->client, "%s: (%dx%d)\n",
+		__func__, fmt->width, fmt->height);
+
+	/*
+		Check requested frame sizes against available and 
+		choose the smallest that still fits the frame.
+	*/
+    for (i = 0; i < ARRAY_SIZE(ov5647_framesizes); i++) 
+    	{
+		    fs = &ov5647_framesizes[i];
+		    if (fmt->width <= fs->width && fmt->height <= fs->height)
+		      break;
+		}
+
+	fmt->width  = fs->width;
+	fmt->height = fs->height;
+	fmt->field  = V4L2_FIELD_NONE;
+
+	*fsize = (struct ov5647_framesize *)fs;
+
+
+	return 0;
 }
 
 static int
 ov5647_po_get_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
                   struct v4l2_subdev_format *format)
 {
-	return 0; /* FIXME */
+	struct ov5647 *s = to_sensor(sd);
+	struct v4l2_mbus_framefmt *mf = &format->format;
+	struct ov5647_framesize *fsize;
+
+	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
+		ov5647_try_format(s, mf, &fsize);
+		return 0;
+	}
+
+	mf = &s->format;
+
+	return 0; 
 }
 
 static int
 ov5647_po_set_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh,
                   struct v4l2_subdev_format *format)
 {
-	return 0; /* FIXME */
+
+	struct ov5647 *s = to_sensor(sd);
+	struct v4l2_mbus_framefmt *mf = &format->format;
+	struct ov5647_framesize *fsize;
+	int ret;
+
+	v4l2_dbg(1, debug, s->client, "%s: (%dx%d)\n",
+		__func__, mf->width, mf->height);
+
+	ov5647_try_format(s, mf, &fsize);
+
+	if (format->which == V4L2_SUBDEV_FORMAT_TRY)
+		return 0; 
+
+	s->format.width = fsize->width;
+	s->format.height = fsize->height;
+
+	ov5647_co_set_power(sd, 1);
+
+	ret = ov5647_reg_write_array(s, fsize->regs, fsize->regs_size);
+	if(ret < 0) {
+    	v4l_err(s->client, "set format error\n");
+    	return ret;
+  	}
+
+    /* read PCLK */
+    ov5647_get_sysclk(s);  	
+
+	return 0;
 }
 
 static int
@@ -270,12 +773,19 @@ ov5647_vo_set_stream(struct v4l2_subdev *sd, int on)
 
 	v4l2_dbg(1, debug, s->client, "%s: on: %d\n", __func__, on);
 
+	if (on)
+		ov5647_reg_write(s, 0x0100, 0x01);
+	else {
+		ov5647_reg_write(s, 0x0100, 0x00);
+		ov5647_power_off(s);
+	}
+
 	return 0;
 }
 
 static const struct v4l2_subdev_video_ops ov5647_subdev_video_ops = {
 	.s_crystal_freq		= ov5647_vo_set_crystal_freq,
-	.s_stream		= ov5647_vo_set_stream,
+	.s_stream			= ov5647_vo_set_stream,
 };
 
 
@@ -293,6 +803,7 @@ static const struct v4l2_subdev_ops ov5647_ops = {
 static int
 ov5647_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
+	struct v4l2_subdev *sd;
 	struct ov5647 *s;
 	int rv;
 
@@ -334,13 +845,15 @@ ov5647_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		client->addr << 1, client->adapter->name);
 
 	/* V4L init */
-	v4l2_i2c_subdev_init(&s->sd, client, &ov5647_ops);
-	strlcpy(s->sd.name, DRIVER_NAME, sizeof(s->sd.name));
+	sd = &s->sd;
+	v4l2_i2c_subdev_init(sd, client, &ov5647_ops);
+	strlcpy(sd->name, DRIVER_NAME, sizeof(sd->name));
 
 	s->pad.flags = MEDIA_PAD_FL_SOURCE;
-	rv = media_entity_init(&s->sd.entity, 1, &s->pad, 0);
+	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
+	rv = media_entity_init(&sd->entity, 1, &s->pad, 0);
 	if (rv) {
-		v4l_err(client, "Failed to initialized pad\n");
+		v4l_err(client, "Failed to initialise pad\n");
 		goto done;
 	}
 
@@ -354,7 +867,7 @@ ov5647_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 done:
 	if (rv > 0) {
-		media_entity_cleanup(&s->sd.entity);
+		media_entity_cleanup(&sd->entity);
 	}
 
 	return rv;
@@ -363,9 +876,10 @@ done:
 static int
 ov5647_remove(struct i2c_client *client)
 {
-	struct ov5647 *s = i2c_get_clientdata(client);
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 
-	v4l2_device_unregister_subdev(&s->sd);
+	v4l2_async_unregister_subdev(sd);
+	media_entity_cleanup(&sd->entity);
 
 	return 0;
 }

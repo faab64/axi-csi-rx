@@ -12,7 +12,7 @@
 			interrupt-parent = <&gic>;
 			bus-id = <0x0>;
 			clocks = <&clkc 39>;
-			clock-frequency = <400000>;
+			clock-frequency = <100000>;
 			#address-cells = <0x1>;
 			#size-cells = <0x0>;
 
@@ -33,24 +33,22 @@
 				};
 			};
 		};
-
-		csi_vdma: vdma@43000000 {
-			compatible = "xlnx,axi-vdma";
+		
+		csi_vdma: dma@43000000 {
+			#dma-cells = <1>;
+			compatible = "xlnx,axi-vdma-1.00.a";
+			interrupt-parent = <&gic>;
+			interrupts = <0 29 4>;
 			reg = <0x43000000 0x10000>;
-
-			xlnx,include-sg = <0x0>;
-			xlnx,num-fstores = <4>;
-
-                        #address-cells = <1>;
-                        #size-cells = <1>;
-                        #dma-cells = <1>;
-
+			xlnx,flush-fsync = <0x1>;
+			xlnx,num-fstores = <0x4>;
 			dma-channel@43000030 {
 				compatible = "xlnx,axi-vdma-s2mm-channel";
 				interrupts = <0 29 4>;
-				xlnx,datawidth = <64>;
-                                xlnx,genlock-mode = <0x0>;
-                                xlnx,include-dre = <0x0>;
+				xlnx,datawidth = <0x20>;
+				xlnx,device-id = <0x0>;
+				xlnx,genlock-mode ;
+				xlnx,include-dre ;
 			};
 		};
 
@@ -61,7 +59,7 @@
 			interrupts = <0 30 4>;
 			interrupt-parent = <&gic>;
 
-			dmas = <&csi_vdma 0>;
+			dmas = <&csi_vdma 1>;
 			dma-names = "video";
 
 			led-gpios = <&gpio 76 0>;
