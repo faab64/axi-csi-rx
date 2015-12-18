@@ -87,9 +87,6 @@ static const struct axi_csi_rx_framesize axi_csi_rx_framesizes[] = {
         .width      = 640,
         .height     = 480,
     }, {
-        .width      = 640,
-        .height     = 480,
-    }, {
         .width      = 1280,
         .height     = 720,
     }, {
