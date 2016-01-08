@@ -86,7 +86,7 @@ begin
 	begin
 		if rising_edge(clk_out) then
 			line_out_r <= line_out;
-			pulse_out  <= line_out xor line_out_r;
+			pulse_out  <= line_out and not line_out_r;
 		end if;
 	end process;
 

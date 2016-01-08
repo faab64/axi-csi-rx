@@ -112,7 +112,7 @@ begin
 		generic map (
 			CINVCTRL_SEL          => "FALSE",
 			DELAY_SRC             => "IDATAIN",
-			HIGH_PERFORMANCE_MODE => "FALSE",
+			HIGH_PERFORMANCE_MODE => "TRUE",
 			IDELAY_TYPE           => "VAR_LOAD",
 			IDELAY_VALUE          => 0,
 			PIPE_SEL              => "FALSE",
@@ -175,7 +175,7 @@ begin
 			generic map (
 				CINVCTRL_SEL          => "FALSE",
 				DELAY_SRC             => "IDATAIN",
-				HIGH_PERFORMANCE_MODE => "FALSE",
+				HIGH_PERFORMANCE_MODE => "TRUE",
 				IDELAY_TYPE           => "VAR_LOAD",
 				IDELAY_VALUE          => 0,
 				PIPE_SEL              => "FALSE",

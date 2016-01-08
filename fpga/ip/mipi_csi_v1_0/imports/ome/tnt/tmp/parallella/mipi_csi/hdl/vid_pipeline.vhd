@@ -135,9 +135,9 @@ begin
 	begin
 		vin_ready <= '0';
 
-		if ctrl_vfm(1) = '0' then
+		if ctrl_vfm = "00" then
 			vin_ready <= '1';
-		elsif ctrl_vfm(1) = '1' then
+		else
 			if ctrl_vum = '0' then
 				vin_ready <= vin_ready_8b;
 			elsif ctrl_vum = '1' then
